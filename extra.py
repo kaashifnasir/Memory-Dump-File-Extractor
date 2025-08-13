@@ -1,15 +1,24 @@
 import argparse
 import os
-import re
-import binascii
 from tqdm import tqdm
 
-# Define file signatures and corresponding file extensions
+# File signatures and limits (max size for file)
 file_signatures = {
-    "jpg": (b'\x00\xFF\xD8', b'\xFF\xD9'),
-    "docx": (b'\x00\x50\x4B\x03\x04', b'\x50\x4B\x05\x06'),
-    "png": (b'\x00\x89\x50\x4E\x47\x0D\x0A\x1A\x0A', b'\x49\x45\x4E\x44\xAE\x42\x60\x82'),
-    # Add more file signatures here as needed
+    "jpg": {
+        "header": b'\xFF\xD8',
+        "footer": b'\xFF\xD9',
+        "max_size": 10 * 1024 * 1024  # 10 MB
+    },
+    "docx": {
+        "header": b'\x50\x4B\x03\x04',
+        "footer": b'\x50\x4B\x05\x06',
+        "max_size": 50 * 1024 * 1024  # 50 MB
+    },
+    "png": {
+        "header": b'\x89\x50\x4E\x47\x0D\x0A\x1A\x0A',
+        "footer": b'\x49\x45\x4E\x44\xAE\x42\x60\x82',
+        "max_size": 20 * 1024 * 1024  # 20 MB
+    },
 }
 
 def extract_files(memdump_file, output_dir, file_types):
@@ -20,15 +29,39 @@ def extract_files(memdump_file, output_dir, file_types):
         os.makedirs(output_dir)
 
     for file_type in file_types:
-        header, footer = file_signatures[file_type]
-        pattern = re.compile(re.escape(header) + b'(.*?)' + re.escape(footer), re.DOTALL)
-        matches = pattern.findall(data)
-        
-        for i, match in tqdm(enumerate(matches), desc=f"Extracting {file_type.upper()} files", unit="file"):
-            file_name = f"{file_type}{i + 1}.{file_type}"
-            file_path = os.path.join(output_dir, file_name)
-            with open(file_path, 'wb') as output_file:
-                output_file.write(header + match + footer)
+        sig = file_signatures[file_type]
+        header = sig["header"]
+        footer = sig["footer"]
+        max_size = sig["max_size"]
+
+        pos = 0
+        file_count = 0
+
+        print(f"\n[+] Extracting {file_type.upper()} files...")
+        while True:
+            start = data.find(header, pos)
+            if start == -1:
+                break  # No more headers found
+
+            end = data.find(footer, start + len(header))
+            if end == -1:
+                break  # No footer found
+
+            # Calculate size
+            size = end + len(footer) - start
+
+            if size <= max_size:
+                file_count += 1
+                file_path = os.path.join(output_dir, f"{file_type}{file_count}.{file_type}")
+                with open(file_path, 'wb') as out_file:
+                    out_file.write(data[start:end + len(footer)])
+            else:
+                # Skip overly large matches (probably false positive)
+                pass
+
+            pos = end + len(footer)
+
+        print(f"[+] Found and saved {file_count} {file_type.upper()} files.")
 
 def main():
     parser = argparse.ArgumentParser(description='Extract files from memory dump.')
@@ -38,7 +71,6 @@ def main():
     parser.add_argument('-dir', dest='output_dir', type=str, help='Output directory for extracted files')
 
     args = parser.parse_args()
-
     extract_files(args.memdump_file, args.output_dir, args.types)
 
 if __name__ == "__main__":
